@@ -1,15 +1,7 @@
-import {
-    Schema,
-    model,
-    models,
-    Types,
-    type Model,
-    type Document,
-    type HydratedDocument,
-} from "mongoose";
-import { Event } from "./event.model";
+import { Schema, model, models, Document, Types, Model } from 'mongoose';
+import Event from './event.model';
 
-// Shape of a Booking document
+// TypeScript interface for Booking document
 export interface IBooking extends Document {
     eventId: Types.ObjectId;
     email: string;
@@ -17,40 +9,58 @@ export interface IBooking extends Document {
     updatedAt: Date;
 }
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const bookingSchema = new Schema<IBooking>(
+const BookingSchema = new Schema<IBooking>(
     {
         eventId: {
             type: Schema.Types.ObjectId,
-            ref: "Event",
-            required: true,
-            index: true,
+            ref: 'Event',
+            required: [true, 'Event ID is required'],
         },
         email: {
             type: String,
-            required: true,
+            required: [true, 'Email is required'],
             trim: true,
             lowercase: true,
             validate: {
-                validator: (value: string) => EMAIL_REGEX.test(value),
-                message: "Invalid email format.",
+                validator: function (email: string) {
+                    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+                    return emailRegex.test(email);
+                },
+                message: 'Please provide a valid email address',
             },
         },
     },
-    { timestamps: true }
+    {
+        timestamps: true, // Auto-generate createdAt and updatedAt
+    }
 );
 
-// Ensure the referenced event actually exists before saving a booking
-bookingSchema.pre("save", async function (this: HydratedDocument<IBooking>) {
-    if (this.isModified("eventId")) {
-        const eventExists = await Event.exists({ _id: this.eventId });
+// Pre-save hook to validate event exists before creating booking
+BookingSchema.pre('save', async function () {
+    const booking = this as IBooking;
+
+    if (booking.isModified('eventId') || booking.isNew) {
+        const eventExists = await Event.findById(booking.eventId).select('_id');
+
         if (!eventExists) {
-            throw new Error(`Event with id "${this.eventId}" does not exist.`);
+            throw new Error(`Event with ID ${booking.eventId} does not exist`);
         }
     }
 });
 
-export const Booking: Model<IBooking> =
-    (models.Booking as Model<IBooking>) ||
-    model<IBooking>("Booking", bookingSchema);
+// Create index on eventId for faster queries
+BookingSchema.index({ eventId: 1 });
+
+// Create compound index for common queries (event bookings by date)
+BookingSchema.index({ eventId: 1, createdAt: -1 });
+
+// Create index on email for user booking lookups
+BookingSchema.index({ email: 1 });
+
+// Enforce one booking per event per email
+BookingSchema.index({ eventId: 1, email: 1 }, { unique: true, name: 'uniq_event_email' });
+
+const Booking: Model<IBooking> =
+    (models.Booking as Model<IBooking>) || model<IBooking>('Booking', BookingSchema);
+
+export default Booking;
